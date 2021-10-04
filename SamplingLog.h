@@ -1,6 +1,16 @@
+#include <U8x8lib.h>
+
 String lastLog;
 unsigned long lastLogTime;
 unsigned long relogTime = 2000L;
+
+
+void doLog(String log, unsigned long logTime) {
+  lastLogTime = logTime;
+  lastLog = log;
+  Serial.println(log);
+}
+
 
 void samplingLog(String log) {
   unsigned long curTime = millis();
@@ -13,8 +23,3 @@ void samplingLog(String log) {
   // }
 }
 
-void doLog(String log, unsigned long logTime) {
-  lastLogTime = logTime;
-  lastLog = log;
-  Serial.println(log);
-}

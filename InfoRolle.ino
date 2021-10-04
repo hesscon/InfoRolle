@@ -1,4 +1,29 @@
+#include <Preferences.h>
+
+//#include <U8g2lib.h>
+#include <U8x8lib.h>
+#ifdef U8X8_HAVE_HW_SPI
+#include <SPI.h>
+#endif
+#ifdef U8X8_HAVE_HW_I2C
+#include <Wire.h>
+#endif
+
 #include "protothreads.h"
+
+// U8G2_SSD1306_128X64_NONAME_F_SW_I2C display(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE); // WORKS!
+// U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ SCL, /* data=*/ SDA);
+
+U8X8_SSD1306_128X64_NONAME_HW_I2C display(/* reset=*/ U8X8_PIN_NONE, /* clock=*/ SCL, /* data=*/ SDA);
+//U8X8_SSD1306_96X16_ER_HW_I2C display(/* reset=*/ U8X8_PIN_NONE, /* clock=*/ SCL, /* data=*/ SDA);
+//U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+
+typedef enum {
+  LINKS_DREHEN, RECHTS_DREHEN, WARTEN, FEHLER
+} RolleStatus;
+
+#include "StatusLog.h"
+#include "RollenSensor.h"
 
 #define MOTOR1_PIN1 16
 #define MOTOR1_PIN2 17
@@ -8,27 +33,27 @@
 #define MOTOR2_PIN2 19
 #define MOTOR2_PWM  4
 
-#define PHOTO_LINKS   34
-#define PHOTO_RECHTS  35
+#define MOTOR_V_ZIEHEN 255
+// #define MOTOR_V_ANLAUFEN 200
+// #define MOTOR_V_SCHIEBEN 150
+#define MOTOR_V_ANLAUFEN 0
+#define MOTOR_V_SCHIEBEN 0
 
-#define START_BUTTON  14
+#define POTI_SCHWELLE_PIN  15
+#define PHOTO_LINKS_PIN   34
+#define PHOTO_RECHTS_PIN  35
+#define START_BUTTON_PIN  14
 #define STATUS_LED    1
 
+#define CFG_NAECHSTE_RICHTUNG_LINKS "naechsteRichtungLinks"
+
+RollenSensor rollenSensor(PHOTO_LINKS_PIN, PHOTO_RECHTS_PIN);
+RolleStatus rollenStatus = WARTEN;
+Preferences preferences;
+pt ptLogStatus;
 unsigned long activatedAt;
 boolean motorActive;
-int photoSchwelle = 2600;
-
-typedef enum {
-  LINKS_DREHEN, RECHTS_DREHEN, WARTEN, FEHLER
-} RolleStatus;
-RolleStatus status = WARTEN;
-boolean linksDrehen = true;
-pt ptStatus;
-
-typedef enum {
-  KEIN, EIN, ZWEI
-} StreifenStatus;
-unsigned long lastStripeMillis = 0L;
+boolean naechsteRichtungLinks;
 
 void setup() {
   Serial.begin(19200);
@@ -37,11 +62,15 @@ void setup() {
   Serial.println("| |\\ | |__  /  \\    |__) /  \\ |    |    |__  ");  
   Serial.println("| | \\| |    \\__/    |  \\ \\__/ |___ |___ |___ ");
   
-  PT_INIT(&ptStatus);
+  display.begin();
+  display.setFont(u8x8_font_chroma48medium8_r);
+  display.drawString(0, 0, "INFO ROLLE");
+
+  PT_INIT(&ptLogStatus);
   pinMode(STATUS_LED, OUTPUT); 
 
-  pinMode(PHOTO_LINKS, INPUT);
-  pinMode(PHOTO_RECHTS, INPUT);
+  pinMode(PHOTO_LINKS_PIN, INPUT);
+  pinMode(PHOTO_RECHTS_PIN, INPUT);
 
   pinMode(MOTOR1_PIN1, OUTPUT);
   pinMode(MOTOR1_PIN2, OUTPUT);
@@ -57,28 +86,28 @@ void setup() {
 
   deactivateMotor();
 
-  pinMode(START_BUTTON, INPUT_PULLUP);
+  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(POTI_SCHWELLE_PIN, INPUT);
+
+  preferences.begin("inforolle", false);
+  naechsteRichtungLinks = preferences.getBool(CFG_NAECHSTE_RICHTUNG_LINKS, true);
+  Serial.printf("Nächste Drehrichtung: %s\n", (naechsteRichtungLinks? "LINKS" : "RECHTS"));
 }
 
 // the loop function runs over and over again forever
 void loop() {
-  PT_SCHEDULE(pingStatus(status, &ptStatus));
+  PT_SCHEDULE(printStatus(rollenStatus, &ptLogStatus));
+  displayRolleStatus(rollenStatus);
+  int streifenSchwelle = readDisplayStreifenSchwelle();
 
-  if (status == FEHLER) {
+  if (rollenStatus == FEHLER) {
     return;
   }
 
   if (!isMotorActive()) {
-    int buttonRead = digitalRead(START_BUTTON);
-    if (buttonRead == HIGH) {
-      // Nicht gedrückt!
+    if (!buttonPressed()) {
       return;
     }
-    do {
-      delay(100);
-      buttonRead = digitalRead(START_BUTTON);
-    } while(buttonRead == LOW);
-    Serial.println("Button pressed!");
     delay(500);
     activateMotor();
     delay(2000); // 2 Sek Band laufen lassen, damit wir keine Streifen lesen
@@ -89,78 +118,76 @@ void loop() {
   // => Ab hier wissen wir dass Motor aktiv ist
   //
 
-  if (activeSinceMs() > 30000) {
-    Serial.println("Deactivate after 10s");
-    setErrorMode();
+  if (buttonPressed()) {
+    deactivateMotor();
+  }
+
+  if (activeSinceMs() > (10*1000)) {
+    Serial.println("Kein Streifen nach 20s erkannt!");
+    errorDetected();
     return;
   }
 
-  StreifenStatus streifen = readStripeState();
+  if (!rollenSensor.istKalibriert()) {
+    rollenSensor.kalibrierungsMessung();
+    return;
+  }
+
+  StreifenStatus streifen = rollenSensor.leseStreifen(rollenStatus, streifenSchwelle);
   if (streifen == KEIN) {
     return;
 
   } else if (streifen == EIN) {
     Serial.println("EIN Streifen erkannt!");
     deactivateMotor();
+    rollenSensor.resetKalibrierung();
 
   } else if (streifen == ZWEI) {
     Serial.println("ZWEI Streifen erkannt!");
     deactivateMotor();
+    rollenSensor.resetKalibrierung();
+    setRichtungswechsel();
+
+  } else {
+    // FEHLER
+    Serial.println("Sensor-Fehler!");
+    errorDetected();
+  }
+}
+
+void setRichtungswechsel() {
     Serial.println("Richtungswechsel!");
-    linksDrehen = !linksDrehen;
-  }
+    naechsteRichtungLinks = !naechsteRichtungLinks;
+    preferences.putBool(CFG_NAECHSTE_RICHTUNG_LINKS, naechsteRichtungLinks);
+    preferences.end();
+    preferences.begin("inforolle", false);
 }
 
-void setErrorMode() {
-    Serial.println("Enter ERROR state!");
+boolean buttonPressed() {
+    int buttonRead = digitalRead(START_BUTTON_PIN);
+    if (buttonRead == HIGH) {
+      return false;
+    }
+    do {
+      delay(100);
+      buttonRead = digitalRead(START_BUTTON_PIN);
+    } while(buttonRead == LOW);
+    Serial.println("Button pressed!");
+    return true;
+}
+
+void errorDetected() {
+    Serial.println("FEHLER!");
     deactivateMotor();
-    lastStripeMillis = 0L;
-    //status = FEHLER;
+    rollenSensor.resetKalibrierung();
+    setRichtungswechsel();
+    //rollenStatus = FEHLER;
 }
 
-StreifenStatus readStripeState() {
-  int photoLinks = analogRead(PHOTO_LINKS);
-  int photoRechts = analogRead(PHOTO_RECHTS);
-  boolean linksDunkel = photoLinks < photoSchwelle;
-  boolean rechtsDunkel = photoRechts < photoSchwelle;
-  String photoReadString = "Photo read: ";
-  photoReadString += photoLinks;
-  photoReadString += " - ";
-  photoReadString += photoRechts;
-  samplingLog(photoReadString);
-
-  if (linksDunkel && rechtsDunkel) {
-    lastStripeMillis = 0L;
-    return ZWEI;
-  }
-
-  unsigned long curMillis = millis();
-  if (lastStripeMillis && ((curMillis - lastStripeMillis) > 1000)) {
-    setErrorMode();
-    return KEIN;
-  }
-
-  if (status == LINKS_DREHEN) {
-    if (rechtsDunkel) {
-      lastStripeMillis = millis();
-      return KEIN;
-    }
-    if (linksDunkel) {
-      lastStripeMillis = 0L;
-      return EIN;
-    }
-  } else if (status == RECHTS_DREHEN) {
-    if (linksDunkel) {
-      lastStripeMillis = millis();
-      return KEIN;
-    }
-    if (rechtsDunkel) {
-      lastStripeMillis = 0L;
-      return EIN;
-    }
-  }
-
-  return KEIN;
+int readDisplayStreifenSchwelle() {
+  int schwelleNormalisiert = (analogRead(POTI_SCHWELLE_PIN) / 4000.0) * 100.0;
+  displayStatus(3, String(schwelleNormalisiert));
+  return schwelleNormalisiert;
 }
 
 boolean isMotorActive() {
@@ -175,37 +202,74 @@ long activeSinceMs() {
 }
 
 void activateMotor() {
-  if (motorActive || status == FEHLER) {
+  if (motorActive || rollenStatus == FEHLER) {
     return;
   }
+
   Serial.println("Activate Motor!");
-  if (linksDrehen) {
+  if (naechsteRichtungLinks) {
+    // Motor 1 voll ziehen
     digitalWrite(MOTOR1_PIN1, HIGH);
     digitalWrite(MOTOR1_PIN2, LOW);
-    ledcWrite(1, 255);
+    ledcWrite(1, MOTOR_V_ZIEHEN);
+
+    // Motor 2 anlaufen und dann schieben
     digitalWrite(MOTOR2_PIN1, LOW);
     digitalWrite(MOTOR2_PIN2, HIGH);
-    ledcWrite(0, 200);
-    status = LINKS_DREHEN;
+    ledcWrite(0, MOTOR_V_ANLAUFEN);
+    delay(500);
+    ledcWrite(0, MOTOR_V_SCHIEBEN);
+
+    rollenStatus = LINKS_DREHEN;
+
   } else {
-    digitalWrite(MOTOR1_PIN1, LOW);
-    digitalWrite(MOTOR1_PIN2, HIGH);
-    ledcWrite(1, 200);
+    // Motor 2 voll ziehen
     digitalWrite(MOTOR2_PIN1, HIGH);
     digitalWrite(MOTOR2_PIN2, LOW);
-    ledcWrite(0, 255);
-    status = RECHTS_DREHEN;
+    ledcWrite(0, MOTOR_V_ZIEHEN);
+
+    // Motor 1 anlaufen und dann schieben
+    digitalWrite(MOTOR1_PIN1, LOW);
+    digitalWrite(MOTOR1_PIN2, HIGH);
+    ledcWrite(1, MOTOR_V_ANLAUFEN);
+    delay(500);
+    ledcWrite(1, MOTOR_V_SCHIEBEN);
+
+    rollenStatus = RECHTS_DREHEN;
   }
+
   motorActive = true;
   activatedAt = millis();
 }
 
 void deactivateMotor() {
   Serial.println("Deactivate Motor!");
-  digitalWrite(MOTOR1_PIN1, LOW);
-  digitalWrite(MOTOR1_PIN2, LOW);
-  digitalWrite(MOTOR2_PIN1, LOW);
-  digitalWrite(MOTOR2_PIN2, LOW);
+  if (rollenStatus == LINKS_DREHEN) {
+    // digitalWrite(MOTOR2_PIN1, HIGH);
+    // digitalWrite(MOTOR2_PIN2, LOW);
+    ledcWrite(0, MOTOR_V_ZIEHEN);
+    digitalWrite(MOTOR1_PIN1, LOW);
+    digitalWrite(MOTOR1_PIN2, HIGH);
+    delay(500);
+
+    digitalWrite(MOTOR1_PIN1, LOW);
+    digitalWrite(MOTOR1_PIN2, LOW);
+    digitalWrite(MOTOR2_PIN1, LOW);
+    digitalWrite(MOTOR2_PIN2, LOW);
+
+  } else if (rollenStatus == RECHTS_DREHEN) {
+    // digitalWrite(MOTOR1_PIN1, HIGH);
+    // digitalWrite(MOTOR1_PIN2, LOW);
+    ledcWrite(1, MOTOR_V_ZIEHEN);
+    digitalWrite(MOTOR2_PIN1, LOW);
+    digitalWrite(MOTOR2_PIN2, HIGH);
+    delay(500);
+
+    digitalWrite(MOTOR2_PIN1, LOW);
+    digitalWrite(MOTOR2_PIN2, LOW);
+    digitalWrite(MOTOR1_PIN1, LOW);
+    digitalWrite(MOTOR1_PIN2, LOW);
+  }
   motorActive = false;
-  status = WARTEN;
+  rollenStatus = WARTEN;
 }
