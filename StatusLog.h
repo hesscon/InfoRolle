@@ -8,11 +8,24 @@ char *rolleStatusToString(RolleStatus status) {
       case FEHLER:
         return "FEHLER...";
 
-      case LINKS_ZIEHEN:
+      case LINKS_AUFROLLEN:
         return "nach LINKS...";
 
-      case RECHTS_ZIEHEN:
+      case RECHTS_AUFROLLEN:
         return "nach RECHTS...";
+    }
+}
+
+char *rolleModusToString(RolleModus modus) {
+    switch (modus) {
+      case ZEIT_GESTEUERT:
+        return "Modus: Zeit";
+
+      case EREIGNIS_GESTEUERT:
+        return "Modus: Ereignis";
+
+      case SAUBER_AUFROLLEN:
+        return "Modus: Aufrollen";
     }
 }
 
@@ -57,6 +70,10 @@ void displayStatus(int row, String status) {
 
 void displayRolleStatus(RolleStatus status) {
   displayStatus(1, rolleStatusToString(status));
+}
+
+void displayRolleModus(RolleModus modus) {
+  displayStatus(5, rolleModusToString(modus));
 }
 
 void displayLog(String log) {
