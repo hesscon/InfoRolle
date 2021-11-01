@@ -8,10 +8,10 @@ char *rolleStatusToString(RolleStatus status) {
       case FEHLER:
         return "FEHLER...";
 
-      case LINKS_ZIEHEN:
+      case LINKS_AUFROLLEN:
         return "nach LINKS...";
 
-      case RECHTS_ZIEHEN:
+      case RECHTS_AUFROLLEN:
         return "nach RECHTS...";
     }
 }
