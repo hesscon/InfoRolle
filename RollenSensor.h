@@ -86,7 +86,7 @@ class RollenSensor {
         return SENSOR_FEHLER;
       }
 
-      if (status == LINKS_DREHEN) {
+      if (status == LINKS_ZIEHEN) {
         if (rechtsDunkel) {
           letzterStreifenMillis = millis();
           return KEIN;
@@ -95,7 +95,7 @@ class RollenSensor {
           letzterStreifenMillis = 0L;
           return EIN;
         }
-      } else if (status == RECHTS_DREHEN) {
+      } else if (status == RECHTS_ZIEHEN) {
         if (linksDunkel) {
           letzterStreifenMillis = millis();
           return KEIN;

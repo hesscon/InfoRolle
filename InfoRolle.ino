@@ -19,19 +19,22 @@ U8X8_SSD1306_128X64_NONAME_HW_I2C display(/* reset=*/ U8X8_PIN_NONE, /* clock=*/
 //U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
 typedef enum {
-  LINKS_DREHEN, RECHTS_DREHEN, WARTEN, FEHLER
+  LINKS_ZIEHEN, RECHTS_ZIEHEN, WARTEN, FEHLER
 } RolleStatus;
 
 #include "StatusLog.h"
 #include "RollenSensor.h"
+#include "RollenMotor.h"
 
 #define MOTOR1_PIN1 16
 #define MOTOR1_PIN2 17
 #define MOTOR1_PWM  5
+#define MOTOR1_GESCHW 0
 
 #define MOTOR2_PIN1 18
 #define MOTOR2_PIN2 19
 #define MOTOR2_PWM  4
+#define MOTOR2_GESCHW 1
 
 #define MOTOR_V_ZIEHEN 200
 // #define MOTOR_V_ANLAUFEN 200
@@ -82,13 +85,13 @@ void setup() {
   pinMode(MOTOR1_PIN2, OUTPUT);
   pinMode(MOTOR1_PWM, OUTPUT);
   ledcSetup(0, 30000, 8);
-  ledcAttachPin(MOTOR1_PWM, 0);
+  ledcAttachPin(MOTOR1_PWM, MOTOR1_GESCHW);
 
   pinMode(MOTOR2_PIN1, OUTPUT);
   pinMode(MOTOR2_PIN2, OUTPUT);
   pinMode(MOTOR2_PWM, OUTPUT);
   ledcSetup(1, 30000, 8);
-  ledcAttachPin(MOTOR2_PWM, 1);
+  ledcAttachPin(MOTOR2_PWM, MOTOR2_GESCHW);
 
   deactivateMotor();
 
@@ -237,32 +240,33 @@ void activateMotor() {
     // Motor 1 voll ziehen
     digitalWrite(MOTOR1_PIN1, HIGH);
     digitalWrite(MOTOR1_PIN2, LOW);
-    ledcWrite(1, MOTOR_V_ZIEHEN);  // MOTOR1_V_PIN 1
+    ledcWrite(MOTOR2_GESCHW, MOTOR_V_ZIEHEN);  // MOTOR1_V_PIN 1
 
     // Motor 2 anlaufen und dann schieben
     digitalWrite(MOTOR2_PIN1, LOW);
     digitalWrite(MOTOR2_PIN2, HIGH);
-    ledcWrite(0, MOTOR_V_ANLAUFEN);  // MOTOR2_V_PIN 0
+    ledcWrite(MOTOR1_GESCHW, MOTOR_V_ANLAUFEN);  // MOTOR2_V_PIN 0
     delay(500);
-    ledcWrite(0, MOTOR_V_SCHIEBEN); 
+    ledcWrite(MOTOR1_GESCHW, MOTOR_V_SCHIEBEN); 
 
-    rollenStatus = LINKS_DREHEN;
+    rollenStatus = LINKS_ZIEHEN;
 
   } else {
     // Motor 2 voll ziehen
     digitalWrite(MOTOR2_PIN1, HIGH);
     digitalWrite(MOTOR2_PIN2, LOW);
-    ledcWrite(0, MOTOR_V_ZIEHEN);
+    ledcWrite(MOTOR1_GESCHW, MOTOR_V_ZIEHEN);
 
     // Motor 1 anlaufen und dann schieben
     digitalWrite(MOTOR1_PIN1, LOW);
     digitalWrite(MOTOR1_PIN2, HIGH);
-    ledcWrite(1, MOTOR_V_ANLAUFEN);
+    ledcWrite(MOTOR2_GESCHW, MOTOR_V_ANLAUFEN);
     delay(500);
-    ledcWrite(1, MOTOR_V_SCHIEBEN);
+    ledcWrite(MOTOR2_GESCHW, MOTOR_V_SCHIEBEN);
 
-    rollenStatus = RECHTS_DREHEN;
+    rollenStatus = RECHTS_ZIEHEN;
   }
+  displayRolleStatus(rollenStatus);
 
   motorActive = true;
   activatedAt = millis();
@@ -270,18 +274,14 @@ void activateMotor() {
 
 void deactivateMotor() {
   Serial.println("Deactivate Motor!");
-  if (rollenStatus == LINKS_DREHEN) {
-    // digitalWrite(MOTOR2_PIN1, HIGH);
-    // digitalWrite(MOTOR2_PIN2, LOW);
-    ledcWrite(0, MOTOR_V_ZIEHEN);
+  if (rollenStatus == LINKS_ZIEHEN) {
+    ledcWrite(MOTOR1_GESCHW, MOTOR_V_ZIEHEN);
     digitalWrite(MOTOR1_PIN1, LOW);
     digitalWrite(MOTOR1_PIN2, HIGH);
     delay(500);
 
-  } else if (rollenStatus == RECHTS_DREHEN) {
-    // digitalWrite(MOTOR1_PIN1, HIGH);
-    // digitalWrite(MOTOR1_PIN2, LOW);
-    ledcWrite(1, MOTOR_V_ZIEHEN);
+  } else if (rollenStatus == RECHTS_ZIEHEN) {
+    ledcWrite(MOTOR2_GESCHW, MOTOR_V_ZIEHEN);
     digitalWrite(MOTOR2_PIN1, LOW);
     digitalWrite(MOTOR2_PIN2, HIGH);
     delay(500);
