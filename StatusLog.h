@@ -16,6 +16,19 @@ char *rolleStatusToString(RolleStatus status) {
     }
 }
 
+char *rolleModusToString(RolleModus modus) {
+    switch (modus) {
+      case ZEIT_GESTEUERT:
+        return "Modus: Zeit";
+
+      case EREIGNIS_GESTEUERT:
+        return "Modus: Ereignis";
+
+      case SAUBER_AUFROLLEN:
+        return "Modus: Aufrollen";
+    }
+}
+
 int printStatus(RolleStatus status, struct pt* pt) {
  PT_BEGIN(pt);
 
@@ -57,6 +70,10 @@ void displayStatus(int row, String status) {
 
 void displayRolleStatus(RolleStatus status) {
   displayStatus(1, rolleStatusToString(status));
+}
+
+void displayRolleModus(RolleModus modus) {
+  displayStatus(5, rolleModusToString(modus));
 }
 
 void displayLog(String log) {

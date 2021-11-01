@@ -19,12 +19,17 @@ U8X8_SSD1306_128X64_NONAME_HW_I2C display(/* reset=*/ U8X8_PIN_NONE, /* clock=*/
 //U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
 typedef enum {
-  LINKS_AUFROLLEN, RECHTS_AUFROLLEN, WARTEN, FEHLER
+  LINKS_AUFROLLEN = 0, RECHTS_AUFROLLEN, WARTEN, FEHLER
 } RolleStatus;
+
+typedef enum {
+  ZEIT_GESTEUERT = 0, EREIGNIS_GESTEUERT, SAUBER_AUFROLLEN
+} RolleModus;
 
 #include "StatusLog.h"
 #include "RollenSensor.h"
 #include "RollenMotor.h"
+#include "EventRegister.h"
 
 #define MOTOR_LINKS_PIN1 16
 #define MOTOR_LINKS_PIN2 17
@@ -57,6 +62,7 @@ typedef enum {
 
 RollenSensor rollenSensor(PHOTO_LINKS_PIN, PHOTO_RECHTS_PIN);
 RolleStatus rollenStatus = WARTEN;
+RolleModus rollenModus = ZEIT_GESTEUERT;
 RollenMotor motorLinks(MOTOR_LINKS_PIN2, MOTOR_LINKS_PIN1, MOTOR_LINKS_GESCHW);
 RollenMotor motorRechts(MOTOR_RECHTS_PIN1, MOTOR_RECHTS_PIN2, MOTOR_RECHTS_GESCHW);
 Preferences preferences;
@@ -66,6 +72,8 @@ unsigned long lastRunEventAt = 0;
 int numberErrors = 0;
 boolean motorActive;
 bool naechsteRichtungLinks;
+int streifenSchwelle;
+EventRegister funcBtnReg = EventRegister();
 
 void setup() {
   Serial.begin(115200);
@@ -112,20 +120,63 @@ void setup() {
 void loop() {
   PT_SCHEDULE(printStatus(rollenStatus, &ptLogStatus));
   displayRolleStatus(rollenStatus);
-  int streifenSchwelle = readDisplayStreifenSchwelle();
+  displayRolleModus(rollenModus);
+  streifenSchwelle = readDisplayStreifenSchwelle();
 
   if (rollenStatus == FEHLER) {
     return;
   }
 
+  if (buttonPressed(FUNC_BUTTON_PIN)) {
+    funcBtnReg.registerEvent();
+    deactivateMotor();
+    rollenModus = static_cast<RolleModus>((rollenModus+1) % 3);
+    return;
+  }
+  if (funcBtnReg.registeredLessThanSecAgo(3)) {
+    return;
+  }
+  funcBtnReg.clearEvent();
+
+  switch(rollenModus) {
+    case ZEIT_GESTEUERT:
+    case EREIGNIS_GESTEUERT:
+      loopNormalModus();
+      break;
+
+    case SAUBER_AUFROLLEN:
+      loopSauberAufrollenModus();
+      break;
+  }
+
+}
+
+void loopSauberAufrollenModus() {
+  if (!isMotorActive()) {
+    activateMotor();
+    delay(1000); // 1 Sek Band laufen lassen, damit wir keine Streifen lesen
+  }
+  if (!rollenSensor.istKalibriert()) {
+    rollenSensor.kalibrierungsMessung();
+    return;
+  }
+
+  StreifenStatus streifen = rollenSensor.leseStreifen(rollenStatus, streifenSchwelle);
+  if (streifen == ZWEI) {
+    Serial.println("ZWEI Streifen erkannt!");
+    deactivateMotor();
+    rollenSensor.resetKalibrierung();
+    setRichtungswechsel();
+    delay(500);
+  }
+}
+
+void loopNormalModus() {
   if (!isMotorActive()) {
     if (runEventTriggered()) {
       delay(500);
       activateMotor();
       delay(1000); // 1 Sek Band laufen lassen, damit wir keine Streifen lesen
-    }
-    if (buttonPressed(FUNC_BUTTON_PIN)) {
-
     }
     return;
   }
